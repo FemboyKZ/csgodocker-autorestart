@@ -86,12 +86,13 @@ jobs:
         run: |
           mkdir -p staging/addons/sourcemod/extensions
           find project/build -name '*${{ matrix.ext }}' -exec cp {} staging/addons/sourcemod/extensions/ \;
-          touch staging/addons/sourcemod/extensions/sm-extension.autoload
+          touch staging/addons/sourcemod/extensions/csgo-autorestart.autoload
+          cp project/configs/autorestart.cfg staging/addons/sourcemod/configs/autorestart.cfg
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: sm-extension-${{ matrix.os_short }}
+          name: csgo-autorestart-${{ matrix.os_short }}
           path: staging/*
 
   release:
@@ -104,24 +105,24 @@ jobs:
       - name: Download Linux artifact
         uses: actions/download-artifact@v7
         with:
-          name: sm-extension-linux
+          name: csgo-autorestart-linux
           path: linux
 
       - name: Download Windows artifact
         uses: actions/download-artifact@v7
         with:
-          name: sm-extension-windows
+          name: csgo-autorestart-windows
           path: windows
 
       - name: Create archives
         run: |
-          cd linux && tar -czf ../sm-extension-linux.tar.gz . && cd ..
-          cd windows && zip -r ../sm-extension-windows.zip . && cd ..
+          cd linux && tar -czf ../csgo-autorestart-linux.tar.gz . && cd ..
+          cd windows && zip -r ../csgo-autorestart-windows.zip . && cd ..
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           files: |
-            sm-extension-linux.tar.gz
-            sm-extension-windows.zip
+            csgo-autorestart-linux.tar.gz
+            csgo-autorestart-windows.zip

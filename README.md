@@ -1,5 +1,9 @@
 
-# SM Extension template
+# CSGODocker AutoRestart
+
+SM Extension to auto restart servers on scheduled time.
+
+Intended to be used with [CSGODocker](https://github.com/FemboyKZ/csgodocker), but will work on it's own.
 
 ## Building
 

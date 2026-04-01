@@ -1,34 +1,37 @@
 #ifndef _INCLUDE_SOURCEMOD_EXTENSION_PROPER_H_
 #define _INCLUDE_SOURCEMOD_EXTENSION_PROPER_H_
 
-#include "smsdk_ext.h"
+#define SMEXT_ENABLE_TIMERSYS
+#define SMEXT_ENABLE_PLAYERHELPERS
+#define SMEXT_ENABLE_GAMEHELPERS
 
-class CSMExtension : public SDKExtension
+#include "smsdk_ext.h"
+#include <ctime>
+
+class CSMExtension : public SDKExtension, public ITimedEvent
 {
 public:
     virtual bool SDK_OnLoad(char *error, size_t maxlength, bool late);
     virtual void SDK_OnAllLoaded();
     virtual void SDK_OnUnload();
+    virtual void OnLevelShutdown();
+
+    // ITimedEvent
+    virtual ResultType OnTimer(ITimer *pTimer, void *pData);
+    virtual void OnTimerEnd(ITimer *pTimer, void *pData);
+
+private:
+    bool CheckDailyRestart();
+    int CountHumanPlayers();
+
+    ITimer *m_pTimer = nullptr;
+    bool m_bRestartNeeded = false;
+    bool m_bScheduledRestartNeeded = false;
+    int m_DailyRestartSeconds = -1; // seconds from midnight UTC, -1 = not set
+    int m_LastRestartYear = -1;
+    int m_LastRestartYday = -1;
 };
 
 extern CSMExtension g_SMExtension;
-
-/** Enable interfaces you want to use here by uncommenting lines */
-//#define SMEXT_ENABLE_FORWARDSYS
-//#define SMEXT_ENABLE_HANDLESYS
-//#define SMEXT_ENABLE_PLAYERHELPERS
-//#define SMEXT_ENABLE_DBMANAGER
-//#define SMEXT_ENABLE_GAMECONF
-//#define SMEXT_ENABLE_MEMUTILS
-//#define SMEXT_ENABLE_GAMEHELPERS
-//#define SMEXT_ENABLE_TIMERSYS
-//#define SMEXT_ENABLE_THREADER
-//#define SMEXT_ENABLE_LIBSYS
-//#define SMEXT_ENABLE_PLUGINSYS
-//#define SMEXT_ENABLE_ADMINSYS
-//#define SMEXT_ENABLE_TEXTPARSERS
-//#define SMEXT_ENABLE_USERMSGS
-//#define SMEXT_ENABLE_TRANSLATOR
-//#define SMEXT_ENABLE_ROOTCONSOLEMENU
 
 #endif // _INCLUDE_SOURCEMOD_EXTENSION_PROPER_H_
