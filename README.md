@@ -3,7 +3,7 @@
 
 SM Extension to auto restart servers on scheduled time.
 
-Intended to be used with [CSGODocker](https://github.com/FemboyKZ/csgodocker), but will work on it's own.
+Intended to be used with [CSGODocker](https://github.com/FemboyKZ/csgodocker), will not work on it's own.
 
 ## Building
 
