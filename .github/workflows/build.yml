@@ -84,7 +84,7 @@ jobs:
       - name: Stage release files
         shell: bash
         run: |
-          mkdir -p staging/addons/sourcemod/extensions
+          mkdir -p staging/addons/sourcemod/extensions staging/addons/sourcemod/configs
           find project/build -name '*${{ matrix.ext }}' -exec cp {} staging/addons/sourcemod/extensions/ \;
           touch staging/addons/sourcemod/extensions/csgo-autorestart.autoload
           cp project/configs/autorestart.cfg staging/addons/sourcemod/configs/autorestart.cfg
