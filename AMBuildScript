@@ -155,6 +155,8 @@ class ExtensionConfig(object):
       '-Wno-overloaded-virtual',
       '-fvisibility-inlines-hidden',
       '-std=gnu++17',
+      '-Wno-register',
+      '-Wno-deprecated-register',
     ]
     if cxx.family == 'gcc':
       cxx.cflags += ['-mfpmath=sse']
