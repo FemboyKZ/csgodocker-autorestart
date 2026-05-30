@@ -1,143 +1,55 @@
 # vim: set sts=2 ts=8 sw=2 tw=99 et ft=python:
-import os, json, re, subprocess
-from ambuild2.frontend.v2_2.cpp.builders import TargetSuffix
+import os, sys
 
-# Edit the functions below for the extra functionality, the return should be
-# a list of path's to wanted locations
-def additionalLibs(context, binary, sdk):
-  return [
-    # Path should be relative either to hl2sdk folder or to build folder
-    # 'path/to/lib/example.lib',
-  ]
-
-def additionalDefines(context, binary, sdk):
-  return [
-    'AMBUILD=1'
-  ]
-
-def additionalIncludes(context, binary, sdk):
-  return [
-    # Path should be absolute only!
-    # os.path.join(sdk['path'], 'game', 'server'),
-    # os.path.join(sdk['path'], 'public', 'entity2'),
-    # 'D:/absolute/path/to/include/folder/'
-  ]
-
-def getGitHeadPath():
-  curr_source = builder.currentSourcePath
-  direct_head = os.path.join(curr_source, '.git', 'HEAD')
-  if not os.path.exists(direct_head):
-    return (None, None)
-
-  git_head_path = None
-  with open(direct_head, 'r') as fp:
-    head_contents = fp.read().strip()
-    if re.search('^[a-fA-F0-9]{40}$', head_contents):
-      git_head_path = direct_head
-    else:
-      git_state = head_contents.split(':')[1].strip()
-      git_head_path = os.path.join(curr_source, '.git', git_state)
-      if not os.path.exists(git_head_path):
-        git_head_path = direct_head
-
-  return (direct_head, git_head_path)
-
-def runAndReturn(argv):
-  p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd = builder.currentSourcePath)
-  output, ignored = p.communicate()
-  rval = p.poll()
-  if rval:
-    raise subprocess.CalledProcessError(rval, argv)
-  text = output.decode('utf8')
-  return text.strip()
-
-def resolveEnvPath(env, folder = None):
+def ResolveEnvPath(env, folder):
   if env in os.environ:
     path = os.environ[env]
     if os.path.isdir(path):
       return path
-  elif folder is not None:
-    head = os.getcwd()
-    oldhead = None
-    while head != None and head != oldhead:
-      path = os.path.join(head, folder)
-      if os.path.isdir(path):
-        return path
-      oldhead = head
-      head, tail = os.path.split(head)
+    return None
+
+  head = os.getcwd()
+  oldhead = None
+  while head != None and head != oldhead:
+    path = os.path.join(head, folder)
+    if os.path.isdir(path):
+      return path
+    oldhead = head
+    head, tail = os.path.split(head)
+
   return None
 
-def resolveMMSRoot():
-  prenormalized_path = None
-  if builder.options.mms_path:
-    prenormalized_path = builder.options.mms_path
-  else:
-    prenormalized_path = resolveEnvPath('MMSOURCE20', 'mmsource-2.0')
-    if not prenormalized_path:
-      prenormalized_path = resolveEnvPath('MMSOURCE_DEV', 'metamod-source')
-    if not prenormalized_path:
-      prenormalized_path = resolveEnvPath('MMSOURCE_DEV', 'mmsource-central')
-    if not prenormalized_path: # Legacy fallback to avoid breakages, even though 1.12 is not supported, many old dev setups are likely using this env variable
-      prenormalized_path = resolveEnvPath('MMSOURCE112', 'mmsource-1.12')
-  if not prenormalized_path or not os.path.isdir(prenormalized_path):
-    raise Exception('Could not find a source copy of Metamod:Source')
-  
-  return os.path.abspath(os.path.normpath(prenormalized_path))
+def Normalize(path):
+  return os.path.abspath(os.path.normpath(path))
 
-mms_root = resolveMMSRoot()
+def SetArchFlags(compiler):
+  if compiler.behavior == 'gcc':
+    if compiler.target.arch == 'x86_64':
+      compiler.cflags += ['-fPIC']
+  elif compiler.like('msvc'):
+    if compiler.target.arch == 'x86_64':
+      compiler.defines += ['WIN64']
 
-def resolveHL2SDKManifestsRoot():
-  prenormalized_path = None
-  if builder.options.hl2sdk_manifests:
-    prenormalized_path = builder.options.hl2sdk_manifests
-  else:
-    prenormalized_path = resolveEnvPath('HL2SDKMANIFESTS', 'hl2sdk-manifests')
-  if not prenormalized_path or not os.path.isdir(prenormalized_path):
-    raise Exception('Could not find a source copy of HL2SDK manifests')
-  
-  return os.path.abspath(os.path.normpath(prenormalized_path))
-
-hl2sdk_manifests_root = resolveHL2SDKManifestsRoot()
-
-SdkHelpers = builder.Eval(os.path.join(hl2sdk_manifests_root, 'SdkHelpers.ambuild'), {
-  'Project': 'metamod'
-})
-
-class MMSPluginConfig(object):
+class ExtensionConfig(object):
   def __init__(self):
-    self.sdk_manifests = []
-    self.sdks = {}
-    self.sdk_targets = []
     self.binaries = []
-    self.mms_root = mms_root
-    self.version_header_deps = []
-    self.versionlib_deps = dict()
+    self.extensions = []
+    self.generated_headers = None
+    self.mms_root = None
+    self.sm_root = None
     self.all_targets = []
     self.target_archs = set()
-
-    self.metadata = {
-      'name': 'autorestart',
-      'alias': 'autorestart',
-      'display_name': 'AutoRestart',
-      'description': 'Auto restart the server when a game/plugin update is detected (cs2docker)',
-      'author': 'jvnipers',
-      'url': 'https://github.com/FemboyKZ/cs2docker-autorestart',
-      'log_tag': 'AutoRestart',
-      'license': 'AGPL-3.0',
-      'version': '{{parsed-version}}',
-    }
 
     if builder.options.targets:
       target_archs = builder.options.targets.split(',')
     else:
-      target_archs = ['x86_64']
+      target_archs = ['x86']
 
     for arch in target_archs:
         try:
             cxx = builder.DetectCxx(target_arch = arch)
             self.target_archs.add(cxx.target.arch)
         except Exception as e:
-            # Error if archs were manually overridden.
             if builder.options.targets:
                 raise
             print('Skipping target {}: {}'.format(arch, e))
@@ -147,334 +59,250 @@ class MMSPluginConfig(object):
     if not self.all_targets:
         raise Exception('No suitable C/C++ compiler was found.')
 
-  def findSdkPath(self, sdk_name):
-    dir_name = 'hl2sdk-{}'.format(sdk_name)
-    hl2sdk_root = builder.options.hl2sdk_root
-    if not hl2sdk_root:
-      hl2sdk_root = resolveEnvPath('HL2SDKROOT')
-
-    if hl2sdk_root:
-      sdk_path = os.path.abspath(os.path.normpath(os.path.join(hl2sdk_root, dir_name)))
-      if os.path.exists(sdk_path):
-        return sdk_path
-    return resolveEnvPath('HL2SDK{}'.format(sdk_name.upper()), dir_name)
+  @property
+  def tag(self):
+    if builder.options.debug == '1':
+      return 'Debug'
+    return 'Release'
 
   def detectSDKs(self):
-    sdk_list = [s for s in builder.options.sdks.split(',') if s]
-    SdkHelpers.find_sdk_path = self.findSdkPath
-    SdkHelpers.findSdks(builder, self.all_targets, sdk_list)
-
-    self.sdks = SdkHelpers.sdks
-    self.sdk_manifests = SdkHelpers.sdk_manifests
-    self.sdk_targets = SdkHelpers.sdk_targets
-
-    for sdk_target in self.sdk_targets:
-      if not sdk_target.sdk['source2']:
-        raise Exception('Only Source2 games are supported by this script.')
-  
-  def addVersioning(self, cxx):
-    cxx.includes += [
-      os.path.join(builder.buildPath, 'versioning')
-    ]
-
-    # Nasty hack to force use lib from ambuild in the vs solution
-    # otherwise it'll be required to compile versionlib separately as a vs solution
-    # which is very annoying to have
-    versionlib = self.versionlib_deps[cxx.target.arch]
-    if builder.options.generator == 'vs':
-      target_path = TargetSuffix(cxx.target)
-      cxx.postlink += [ os.path.join(builder.buildPath, 'versionlib', target_path, 'versionlib.lib') ]
-      cxx.sourcedeps += [ versionlib ]
+    if builder.options.mms_path:
+      self.mms_root = builder.options.mms_path
     else:
-      cxx.postlink += [ versionlib ]
-    
-    cxx.sourcedeps += self.version_header_deps
+      self.mms_root = ResolveEnvPath('MMSOURCE112', 'mmsource-1.12')
+      if not self.mms_root:
+        self.mms_root = ResolveEnvPath('MMSOURCE', 'metamod-source')
+      if not self.mms_root:
+        self.mms_root = ResolveEnvPath('MMSOURCE_DEV', 'metamod-source')
 
-  def generateVersioningHeaders(self):
-    builder.SetBuildFolder('/')
+    if not self.mms_root or not os.path.isdir(self.mms_root):
+      raise Exception('Could not find a source copy of Metamod:Source')
+    self.mms_root = Normalize(self.mms_root)
 
-    # Generate metadata plugin header, which would cause plugin recompilation if changed
-    self.version_header_deps += [
-      builder.AddOutputFile(os.path.join('versioning', 'version_gen.h'), f"""
-#ifndef _PLUGIN_METADATA_INFORMATION_H_
-#define _PLUGIN_METADATA_INFORMATION_H_
+    if builder.options.sm_path:
+      self.sm_root = builder.options.sm_path
+    else:
+      self.sm_root = ResolveEnvPath('SOURCEMOD112', 'sourcemod-1.12')
+      if not self.sm_root:
+        self.sm_root = ResolveEnvPath('SOURCEMOD', 'sourcemod')
+      if not self.sm_root:
+        self.sm_root = ResolveEnvPath('SOURCEMOD_DEV', 'sourcemod')
 
-#define PLUGIN_NAME           \"{self.metadata['name']}\"
-#define PLUGIN_ALIAS          \"{self.metadata['alias']}\"
-#define PLUGIN_DISPLAY_NAME   \"{self.metadata['display_name']}\"
-#define PLUGIN_DESCRIPTION    \"{self.metadata['description']}\"
-#define PLUGIN_AUTHOR         \"{self.metadata['author']}\"
-#define PLUGIN_URL            \"{self.metadata['url']}\"
-#define PLUGIN_LOGTAG         \"{self.metadata['log_tag']}\"
-#define PLUGIN_LICENSE        \"{self.metadata['license']}\"
+    if not self.sm_root or not os.path.isdir(self.sm_root):
+      raise Exception('Could not find a source copy of SourceMod')
+    self.sm_root = Normalize(self.sm_root)
 
-extern const char* PLUGIN_FULL_VERSION;
-extern const char* PLUGIN_REVISION_SHORT;
-extern const char* PLUGIN_REVISION_LONG;
-extern const char* PLUGIN_REVISION_COUNT;
+    # hl2sdk-csgo (this extension calls engine/steam interfaces, so it needs the SDK).
+    if builder.options.hl2sdk_root:
+      self.hl2sdk = os.path.join(builder.options.hl2sdk_root, 'hl2sdk-csgo')
+    elif 'HL2SDKCSGO' in os.environ and os.path.isdir(os.environ['HL2SDKCSGO']):
+      self.hl2sdk = os.environ['HL2SDKCSGO']
+    elif 'HL2SDK' in os.environ and os.path.isdir(os.environ['HL2SDK']):
+      self.hl2sdk = os.environ['HL2SDK']
+    else:
+      self.hl2sdk = ResolveEnvPath('HL2SDKCSGO', 'hl2sdk-csgo')
 
-#endif /* _PLUGIN_METADATA_INFORMATION_H_ */
-      """.encode('utf-8'))
-    ]
-
-  def generateVersionLib(self):
-    builder.SetBuildFolder('/')
-
-    version = self.metadata['version']
-
-    direct_head, git_head_path = getGitHeadPath()
-    shorthash = longhash = revision_count = '0'
-    if direct_head and git_head_path:
-      # Force track head changes to trigger recompilation
-      builder.AddConfigureFile(git_head_path)
-      builder.AddConfigureFile(direct_head)
-
-      revision_count = runAndReturn(['git', 'rev-list', '--count', 'HEAD'])
-      revision_hash = runAndReturn(['git', 'log', '--pretty=format:%h:%H', '-n', '1'])
-      shorthash, longhash = revision_hash.split(':')
-
-    if '{{git-shorthash}}' in version:
-      version = version.replace('{{git-shorthash}}', shorthash)
-
-    if '{{git-longhash}}' in version:
-      version = version.replace('{{git-longhash}}', longhash)
-
-    if '{{git-count}}' in version:
-      version = version.replace('{{git-count}}', revision_count)
-
-    # For the version strings and git hashes compile that to a static library instead,
-    # to prevent a full recompilation on version/git changes which would only trigger this cpp
-    # and linking to be performed
-    versionlib_cpp = builder.AddOutputFile(os.path.join('versioning', 'versionlib.cpp'), f"""
-const char *PLUGIN_FULL_VERSION   = \"{version}\";
-const char *PLUGIN_REVISION_SHORT = \"{shorthash}\";
-const char *PLUGIN_REVISION_LONG  = \"{longhash}\";
-const char *PLUGIN_REVISION_COUNT = \"{revision_count}\";
-    """.encode('utf-8'))
-
-    for cxx in self.all_targets:
-      lib = cxx.StaticLibrary(f'versionlib_{cxx.target.arch}')
-	  
-      self.configureCXX(lib.compiler)
-	  
-      # VS generator doesn't like having non string sources, but we need that for correct
-      # dependency tracking
-      if builder.options.generator == 'vs':
-        lib.sources += [ os.path.join(builder.buildPath, 'versioning', 'versionlib.cpp') ]
-        lib.compiler.sourcedeps += [ versionlib_cpp ]
-      else:
-        lib.sources += [ versionlib_cpp ]
-	  
-      self.versionlib_deps[cxx.target.arch] = builder.Add(lib).binary
+    if not self.hl2sdk or not os.path.isdir(self.hl2sdk):
+      raise Exception('Could not find a source copy of hl2sdk-csgo')
+    self.hl2sdk = Normalize(self.hl2sdk)
 
   def configure(self):
+    allowed_archs = ['x86','x86_64']
+    if not set(self.target_archs).issubset(allowed_archs):
+      raise Exception('Unknown target architecture: {0}'.format(self.target_archs))
     for cxx in self.all_targets:
-      if cxx.target.arch not in ['x86', 'x86_64']:
-        raise Exception('Unknown target architecture: {0}'.format(arch))
+        self.configure_cxx(cxx)
 
-      self.configureCXX(cxx)
+  def configure_cxx(self, cxx):
+    if cxx.like('gcc'):
+      self.configure_gcc(cxx)
+    elif cxx.family == 'msvc':
+      self.configure_msvc(cxx)
 
-  def configurePluginMetadata(self):
-    plugin_metadata_path = os.path.join(builder.sourcePath, 'plugin-metadata.json')
-
-    if not os.path.exists(plugin_metadata_path):
-      with open(plugin_metadata_path, 'w') as f:
-        json.dump(self.metadata, f, indent = 4)
-    else:
-      obj = None
-      with open(plugin_metadata_path, 'r') as f:
-        obj = json.load(f)
-        self.metadata.update(obj)
-
-      # If some fields are missing, add them back in from a sample metadata
-      if len(obj) < len(self.metadata):
-        with open(plugin_metadata_path, 'w') as f:
-          json.dump(self.metadata, f, indent = 4)
-
-    self.generateVersioningHeaders()
-    self.generateVersionLib()    
-
-  def configureCXX(self, cxx):
-    if cxx.behavior == 'gcc':
-      cxx.defines += [
-        'stricmp=strcasecmp',
-        '_stricmp=strcasecmp',
-        '_snprintf=snprintf',
-        '_vsnprintf=vsnprintf',
-        'HAVE_STDINT_H',
-        'GNUC',
-      ]
-      cxx.cflags += [
-        '-pipe',
-        '-fno-strict-aliasing',
-        '-Wall',
-        '-Werror',
-        '-Wno-sign-compare',
-        '-Wno-uninitialized',
-        '-Wno-unused',
-        '-Wno-switch',
-        '-msse',
-        '-fPIC',
-      ]
-
-      cxx.cxxflags += ['-std=c++17']
-      if (builder.options.asan != '1') and ((cxx.version >= 'gcc-4.0') or cxx.family == 'clang'):
-        cxx.cflags += ['-fvisibility=hidden']
-        cxx.cxxflags += ['-fvisibility-inlines-hidden']
-      cxx.cxxflags += [
-        '-fno-exceptions',
-        '-fno-threadsafe-statics',
-        '-Wno-non-virtual-dtor',
-        '-Wno-overloaded-virtual',
-        '-Wno-register',
-        '-Wno-invalid-offsetof',
-      ]
-      if (builder.options.asan == '1'):
-        cxx.cxxflags += [
-          '-fsanitize=address',
-          '-fsanitize-address-use-after-scope',
-          '-fno-omit-frame-pointer',
-          '-g',
-        ]
-        cxx.linkflags += [
-          '-fsanitize=address',
-          '-fsanitize-address-use-after-scope',
-        ]
-      if (cxx.version >= 'gcc-4.7' or cxx.family == 'clang'):
-        cxx.cxxflags += ['-Wno-delete-non-virtual-dtor']
-      if cxx.family == 'gcc':
-        cxx.cflags += ['-mfpmath=sse']
-      if cxx.family == 'clang':
-        cxx.cxxflags += ['-Wno-implicit-exception-spec-mismatch']
-        if cxx.version >= 'clang-3.9':
-          cxx.cxxflags += ['-Wno-expansion-to-defined']
-        if cxx.version >= 'clang-3.6':
-          cxx.cxxflags += ['-Wno-inconsistent-missing-override']
-        if cxx.version >= 'clang-3.4':
-          cxx.cxxflags += ['-Wno-deprecated-register']
-        else:
-          cxx.cxxflags += ['-Wno-deprecated']
-      
-      # Work around SDK warnings.
-      if cxx.version >= 'clang-10.0':
-        cxx.cflags += [
-          '-Wno-implicit-int-float-conversion',
-          '-Wno-tautological-overlap-compare',
-        ]
-
-    elif cxx.like('msvc'):
-      if builder.options.debug == '1':
-        cxx.cflags += ['/MTd']
-        cxx.linkflags += ['/NODEFAULTLIB:libcmt']
-      else:
-        cxx.cflags += ['/MT']
-      cxx.defines += [
-        '_CRT_SECURE_NO_DEPRECATE',
-        '_CRT_SECURE_NO_WARNINGS',
-        '_CRT_NONSTDC_NO_DEPRECATE',
-      ]
-      cxx.cflags += [
-        '/W3',
-        '/Zi',
-        '/std:c++17',
-      ]
-      cxx.cxxflags += ['/TP']
-      
-      cxx.linkflags += [
-        '/SUBSYSTEM:WINDOWS',
-        'kernel32.lib',
-        'user32.lib',
-        'gdi32.lib',
-        'winspool.lib',
-        'comdlg32.lib',
-        'advapi32.lib',
-        'shell32.lib',
-        'ole32.lib',
-        'oleaut32.lib',
-        'uuid.lib',
-        'odbc32.lib',
-        'odbccp32.lib',
-      ]
-
-    # Optimization
     if builder.options.opt == '1':
       cxx.defines += ['NDEBUG']
-      if cxx.behavior == 'gcc':
-        cxx.cflags += ['-O3']
-      elif cxx.behavior == 'msvc':
-        cxx.cflags += ['/Ox', '/Zo']
-        cxx.linkflags += ['/OPT:ICF', '/OPT:REF']
-
-    # Debugging
     if builder.options.debug == '1':
       cxx.defines += ['DEBUG', '_DEBUG']
-      if cxx.behavior == 'gcc':
-        cxx.cflags += ['-g3']
-      elif cxx.behavior == 'msvc':
-        cxx.cflags += ['/Od', '/RTC1']
 
-    # Don't omit the frame pointer.
-    # This needs to be after our optimization flags which could otherwise disable it.
-    if cxx.behavior == 'gcc':
-      cxx.cflags += ['-fno-omit-frame-pointer']
-    elif cxx.behavior == 'msvc':
-      cxx.cflags += ['/Oy-']
-
-    # Platform-specifics
     if cxx.target.platform == 'linux':
-      cxx.defines += ['LINUX', '_LINUX', 'POSIX', '_FILE_OFFSET_BITS=64']
-      if cxx.family == 'gcc':
-        cxx.linkflags += ['-static-libgcc']
-      elif cxx.family == 'clang':
-        cxx.linkflags += ['-lgcc_eh']
-      cxx.linkflags += ['-static-libstdc++']
+      self.configure_linux(cxx)
     elif cxx.target.platform == 'windows':
-      cxx.defines += ['WIN32', '_WINDOWS']
+      self.configure_windows(cxx)
 
-  def Library(self, cxx, name):
-    binary = cxx.Library(name)
-    return binary
-  
-  def HL2Library(self, context, compiler, name, sdk):
-    binary = self.Library(compiler, name)
-    mms_core_path = os.path.join(self.mms_root, 'core')
-    cxx = binary.compiler
-    
-    self.addVersioning(cxx)
+  def configure_gcc(self, cxx):
+    cxx.defines += [
+      'stricmp=strcasecmp',
+      '_stricmp=strcasecmp',
+      '_snprintf=snprintf',
+      '_vsnprintf=vsnprintf',
+      'HAVE_STDINT_H',
+      'GNUC',
+    ]
+    cxx.cflags += [
+      '-pipe',
+      '-fno-strict-aliasing',
+      '-Wall',
+      '-Wno-unused',
+      '-Wno-switch',
+      '-Wno-array-bounds',
+      '-fvisibility=hidden',
+    ]
+    if cxx.target.arch in ['x86', 'x86_64']:
+      cxx.cflags += ['-msse']
+    cxx.cxxflags += [
+      '-fno-threadsafe-statics',
+      '-Wno-non-virtual-dtor',
+      '-Wno-overloaded-virtual',
+      '-fvisibility-inlines-hidden',
+      '-std=gnu++17',
+    ]
+    if cxx.family == 'gcc':
+      cxx.cflags += ['-mfpmath=sse']
+    if builder.options.opt == '1':
+        cxx.cflags += ['-O3']
+    cxx.cflags += ['-fno-omit-frame-pointer']
 
-    cxx.cxxincludes += [
+  def configure_msvc(self, cxx):
+    if builder.options.debug == '1':
+      cxx.cflags += ['/MTd']
+      cxx.linkflags += ['/NODEFAULTLIB:libcmt']
+    else:
+      cxx.cflags += ['/MT']
+    cxx.defines += [
+      '_CRT_SECURE_NO_DEPRECATE',
+      '_CRT_SECURE_NO_WARNINGS',
+      '_CRT_NONSTDC_NO_DEPRECATE',
+      '_ITERATOR_DEBUG_LEVEL=0',
+    ]
+    cxx.cflags += ['/W3']
+    cxx.cxxflags += [
+      '/EHsc',
+      '/GR-',
+      '/TP',
+      '/std:c++17',
+    ]
+    cxx.linkflags += [
+      'kernel32.lib',
+      'user32.lib',
+      'gdi32.lib',
+      'winspool.lib',
+      'comdlg32.lib',
+      'advapi32.lib',
+      'shell32.lib',
+      'ole32.lib',
+      'oleaut32.lib',
+      'uuid.lib',
+      'odbc32.lib',
+      'odbccp32.lib',
+    ]
+    if builder.options.opt == '1':
+      cxx.cflags += ['/Ox', '/Zo']
+      cxx.linkflags += ['/OPT:ICF', '/OPT:REF']
+    if builder.options.debug == '1':
+      cxx.cflags += ['/Od', '/RTC1']
+    cxx.cflags += ['/Oy-']
+
+  def configure_linux(self, cxx):
+    cxx.defines += ['LINUX', '_LINUX', 'POSIX', '_FILE_OFFSET_BITS=64']
+    cxx.linkflags += ['-lm']
+    if cxx.family == 'gcc':
+      cxx.linkflags += ['-static-libgcc']
+    elif cxx.family == 'clang':
+      cxx.linkflags += ['-lgcc_eh']
+    cxx.linkflags += ['-static-libstdc++']
+
+  def configure_windows(self, cxx):
+    cxx.defines += ['WIN32', '_WINDOWS']
+
+  def ConfigureForExtension(self, context, compiler):
+    compiler.cxxincludes += [
       os.path.join(context.currentSourcePath),
-      os.path.join(mms_core_path),
-      os.path.join(mms_core_path, 'sourcehook'),
+      os.path.join(context.currentSourcePath, 'sdk'),
+      os.path.join(self.sm_root, 'public'),
+      os.path.join(self.sm_root, 'public', 'extensions'),
+      os.path.join(self.sm_root, 'sourcepawn', 'include'),
+      os.path.join(self.sm_root, 'public', 'amtl', 'amtl'),
+      os.path.join(self.sm_root, 'public', 'amtl'),
+    ]
+    return compiler
+
+  def ConfigureForHL2(self, binary):
+    compiler = binary.compiler
+    SetArchFlags(compiler)
+
+    compiler.cxxincludes += [
+      os.path.join(self.mms_root, 'core'),
+      os.path.join(self.mms_root, 'core', 'sourcehook'),
     ]
 
-    for other_sdk in self.sdk_manifests:
-      cxx.defines += ['SE_{}={}'.format(other_sdk['define'], other_sdk['code'])]
+    # CSGO engine. (No META_NO_HL2SDK: this extension calls engine/steam interfaces.)
+    compiler.defines += ['SOURCE_ENGINE=22', 'NETWORK_VARS_ENABLED']
 
-    if sdk['source2']:
-      cxx.defines += ['META_IS_SOURCE2']
-      binary.sources += [
-        os.path.join(sdk['path'], 'public', 'tier0', 'memoverride.cpp'),
-        os.path.join(sdk['path'], 'tier1', 'convar.cpp'),
+    # Engine identifiers compared against SOURCE_ENGINE inside Metamod headers.
+    engines = [
+      ('EPISODEONE', 1), ('DARKMESSIAH', 2), ('ORANGEBOX', 3), ('BLOODYGOODTIME', 4),
+      ('EYE', 5), ('CSS', 6), ('HL2DM', 7), ('DODS', 8), ('SDK2013', 9), ('BMS', 11),
+      ('TF2', 12), ('LEFT4DEAD', 13), ('NUCLEARDAWN', 14), ('CONTAGION', 15),
+      ('LEFT4DEAD2', 16), ('ALIENSWARM', 17), ('PORTAL2', 18), ('BLADE', 19),
+      ('INSURGENCY', 20), ('DOI', 21), ('CSGO', 22),
+    ]
+    compiler.defines += ['SE_{0}={1}'.format(name, code) for name, code in engines]
+
+    if compiler.like('msvc'):
+      compiler.defines += ['COMPILER_MSVC', 'COMPILER_MSVC32']
+    else:
+      compiler.defines += ['COMPILER_GCC']
+
+    for path in [
+      ['public'], ['public', 'engine'], ['public', 'mathlib'], ['public', 'vstdlib'],
+      ['public', 'tier0'], ['public', 'tier1'], ['public', 'game', 'server'],
+      ['public', 'toolframework'], ['game', 'shared'], ['common'],
+    ]:
+      compiler.cxxincludes += [os.path.join(self.hl2sdk, *path)]
+
+    if compiler.target.platform == 'linux':
+      lib_folder = os.path.join(self.hl2sdk, 'lib', 'linux')
+      compiler.linkflags += [
+        # Static libs (order matters: dependents before dependencies).
+        os.path.join(lib_folder, 'tier1_i486.a'),
+        os.path.join(lib_folder, 'mathlib_i486.a'),
+        os.path.join(lib_folder, 'interfaces_i486.a'),
+        # Shared libs (tier0/vstdlib/steam) linked by exact name; resolved at runtime
+        # from the server's own copies.
+        '-L' + lib_folder,
+        '-l:libtier0.so',
+        '-l:libvstdlib.so',
+        '-l:libsteam_api.so',
       ]
-
-    SdkHelpers.configureCxx(context, binary, sdk)
-
-    cxx.linkflags += additionalLibs(context, binary, sdk)
-    cxx.defines += additionalDefines(context, binary, sdk)
-    cxx.cxxincludes += additionalIncludes(context, binary, sdk)
-    context.AddConfigureFile(os.path.join(context.currentSourcePath, 'plugin-metadata.json'))
+    elif compiler.target.platform == 'windows':
+      for lib in ['tier0', 'tier1', 'vstdlib', 'mathlib', 'interfaces', 'steam_api']:
+        compiler.linkflags += [os.path.join(self.hl2sdk, 'lib', 'public', lib + '.lib')]
 
     return binary
 
-MMSPlugin = MMSPluginConfig()
-MMSPlugin.detectSDKs()
-MMSPlugin.configurePluginMetadata()
-MMSPlugin.configure()
+  def HL2Library(self, context, name):
+    binary = context.compiler.Library(name)
+    self.ConfigureForExtension(context, binary.compiler)
+    return self.ConfigureForHL2(binary)
+
+  def HL2Project(self, context, name):
+    project = builder.LibraryProject(name)
+    return project
+
+  def HL2Config(self, context, project, name, compiler):
+    binary = project.Configure(compiler, name, '{0} - {1}'.format(self.tag, compiler.target.arch))
+    self.ConfigureForExtension(context, binary.compiler)
+    return self.ConfigureForHL2(binary)
+
+Extension = ExtensionConfig()
+Extension.detectSDKs()
+Extension.configure()
+
+builder.targets = builder.CloneableList(Extension.all_targets)
 
 BuildScripts = [
   'AMBuilder',
   'PackageScript',
 ]
 
-builder.Build(BuildScripts, { 'MMSPlugin': MMSPlugin })
+builder.Build(BuildScripts, { 'Extension': Extension })

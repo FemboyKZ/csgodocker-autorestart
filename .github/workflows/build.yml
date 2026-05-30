@@ -1,139 +1,214 @@
 name: Build
-
 on:
   push:
-    branches: ["*"]
-    tags: ["*"]
   pull_request:
-    branches: ["*"]
 
 jobs:
-  build-linux:
-    name: Linux
+  config:
     runs-on: ubuntu-latest
-    container:
-      image: registry.gitlab.steamos.cloud/steamrt/sniper/sdk:latest
-
+    outputs:
+      versions: ${{ steps.set.outputs.versions }}
     steps:
-      - name: Checkout
+      - id: set
+        name: Set version matrix
+        run: |
+          python3 - << 'PYEOF'
+          import json, os
+          VERSIONS = [
+              ("1.12-dev", "1.12-dev"),
+              ("master", "1.12-dev"),
+          ]
+          versions = [
+              {"sm_ver": s, "mm_ver": m,
+               "sm_label": s.replace("-dev", "").replace("master", "1.13"),
+               "mm_label": m.replace("-dev", "").replace("master", "2.0"),}
+              for s, m in VERSIONS
+          ]
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write("versions=" + json.dumps(versions) + "\n")
+          PYEOF
+
+  build:
+    needs: config
+    strategy:
+      matrix:
+        platform:
+          - { os: ubuntu-latest, os_short: linux, ext: .so }
+          - { os: windows-latest, os_short: windows, ext: .dll }
+        version: ${{ fromJSON(needs.config.outputs.versions) }}
+      fail-fast: false
+    runs-on: ${{ matrix.platform.os }}
+    name: ${{ matrix.platform.os_short }}--mm-${{ matrix.version.mm_label }}--sm-${{ matrix.version.sm_label }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: project
+
+      - name: Checkout SourceMod
         uses: actions/checkout@v6
         with:
+          repository: alliedmodders/sourcemod
+          ref: ${{ matrix.version.sm_ver }}
           submodules: recursive
-          fetch-depth: 0
+          path: sourcemod
 
-      - name: Install dependencies
-        run: |
-          git config --global --add safe.directory $GITHUB_WORKSPACE
-          apt-get update -y
-          apt-get install -y python3 python3-pip
-          git clone https://github.com/alliedmodders/ambuild.git
-          pip3 install ./ambuild
-
-      - name: Configure
-        run: |
-          mkdir -p build && cd build
-          python3 ../configure.py \
-            --sdks cs2 \
-            --targets x86_64 \
-            --mms_path ../metamod-source \
-            --hl2sdk-manifests ../metamod-source/hl2sdk-manifests \
-            --enable-optimize
-
-      - name: Build
-        working-directory: build
-        run: ambuild
-
-      - name: Stage package
-        run: |
-          mkdir -p staging/addons
-          cp -r build/package/addons/* staging/addons/
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: autorestart-linux
-          path: staging
-
-  build-windows:
-    name: Windows
-    runs-on: windows-latest
-
-    steps:
-      - name: Checkout
+      - name: Checkout Metamod:Source
         uses: actions/checkout@v6
         with:
+          repository: alliedmodders/metamod-source
           submodules: recursive
+          ref: ${{ matrix.version.mm_ver }}
+          path: metamod-source
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
+      - uses: actions/setup-python@v6
+        name: Setup Python
         with:
           python-version: "3.14"
 
-      - name: Set up MSVC
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: amd64
+      - name: Install Python dependencies
+        run: python -m pip install --upgrade pip setuptools wheel
 
       - name: Install AMBuild
         run: |
           git clone https://github.com/alliedmodders/ambuild.git
-          pip install ./ambuild
+          cd ambuild
+          python setup.py install --user
 
-      - name: Configure
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
         run: |
-          mkdir -Force build | Out-Null; cd build
-          python ../configure.py `
-            --sdks cs2 `
-            --targets x86_64 `
-            --mms_path ../metamod-source `
-            --hl2sdk-manifests ../metamod-source/hl2sdk-manifests `
-            --enable-optimize
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-multilib g++-multilib libstdc++6 lib32stdc++6 \
+            libc6-dev-i386 linux-libc-dev:i386
 
       - name: Build
-        working-directory: build
-        run: ambuild
-
-      - name: Stage package
+        working-directory: project
+        shell: bash
         run: |
-          New-Item -ItemType Directory -Force -Path staging/addons | Out-Null
-          Copy-Item -Recurse build/package/addons/* staging/addons/
+          mkdir build && cd build
+          python ../configure.py \
+            --sm-path="${{ github.workspace }}/sourcemod" \
+            --mms-path="${{ github.workspace }}/metamod-source" \
+            --enable-optimize \
+            --targets=x86
+          ambuild
+
+      - name: Stage release files
+        shell: bash
+        run: |
+          mkdir -p staging/addons/sourcemod/extensions
+          touch staging/addons/sourcemod/extensions/autorestart.autoload
+          find project/build -name '*${{ matrix.platform.ext }}' -exec cp {} staging/addons/sourcemod/extensions/ \;
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: autorestart-windows
-          path: staging
+          name: autorestart-${{ matrix.platform.os_short }}--mm-${{ matrix.version.mm_label }}--sm-${{ matrix.version.sm_label }}
+          path: staging/*
+
+  build-docker:
+    needs: config
+    strategy:
+      matrix:
+        runtime:
+          - name: sniper
+            image: registry.gitlab.steamos.cloud/steamrt/sniper/sdk:latest
+          #- name: sourcemod-deb11
+          #  image: ghcr.io/alliedmodders/build-containers/debian11-clang22:latest
+          #- name: scout
+          #  image: registry.gitlab.steamos.cloud/steamrt/scout/sdk:latest
+        version: ${{ fromJSON(needs.config.outputs.versions) }}
+      fail-fast: false
+    runs-on: ubuntu-latest
+    name: linux-${{ matrix.runtime.name }}--mm-${{ matrix.version.mm_label }}--sm-${{ matrix.version.sm_label }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: project
+
+      - name: Checkout SourceMod
+        uses: actions/checkout@v6
+        with:
+          repository: alliedmodders/sourcemod
+          ref: ${{ matrix.version.sm_ver }}
+          submodules: recursive
+          path: sourcemod
+
+      - name: Checkout Metamod:Source
+        uses: actions/checkout@v6
+        with:
+          repository: alliedmodders/metamod-source
+          submodules: recursive
+          ref: ${{ matrix.version.mm_ver }}
+          path: metamod-source
+
+      - name: Build inside container
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/work" \
+            -w /work/project \
+            -e HL2SDK=/work/project/hl2sdk-csgo \
+            -e MMSOURCE=/work/metamod-source \
+            -e SOURCEMOD=/work/sourcemod \
+            ${{ matrix.runtime.image }} \
+            bash -ec '
+              dpkg --add-architecture i386 || true
+              apt-get update
+              apt-get install -y --no-install-recommends \
+                  python3-pip python3-venv git ca-certificates \
+                  gcc-multilib g++-multilib libstdc++6:i386
+              python3 -m venv /opt/ambuild-venv
+              /opt/ambuild-venv/bin/pip install --upgrade pip
+              /opt/ambuild-venv/bin/pip install git+https://github.com/alliedmodders/ambuild.git@master
+              export PATH=/opt/ambuild-venv/bin:$PATH
+              mkdir -p build && cd build
+              python3 ../configure.py \
+                --sm-path=/work/sourcemod \
+                --mms-path=/work/metamod-source \
+                --enable-optimize \
+                --targets=x86
+              ambuild
+            '
+
+      - name: Stage release files
+        run: |
+          mkdir -p staging/addons/sourcemod/extensions
+          touch staging/addons/sourcemod/extensions/autorestart.autoload
+          find project/build -name '*.so' -exec cp {} staging/addons/sourcemod/extensions/ \;
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: autorestart-linux-${{ matrix.runtime.name }}--mm-${{ matrix.version.mm_label }}--sm-${{ matrix.version.sm_label }}
+          path: staging/*
 
   release:
-    name: Release
+    needs: [build, build-docker]
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [build-linux, build-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
-
     steps:
-      - name: Download Linux artifact
+      - name: Download all artifacts
         uses: actions/download-artifact@v8
         with:
-          name: autorestart-linux
-          path: autorestart-linux
+          path: artifacts
 
-      - name: Download Windows artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: autorestart-windows
-          path: autorestart-windows
-
-      - name: Create archives
+      - name: Zip artifacts
         run: |
-          cd autorestart-linux && zip -r ../autorestart-${{ github.ref_name }}-linux.zip . && cd ..
-          cd autorestart-windows && zip -r ../autorestart-${{ github.ref_name }}-windows.zip . && cd ..
+          cd artifacts
+          for dir in */; do
+            zip -r "../${dir%/}.zip" "$dir"
+          done
+          cd ..
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
-        with:
-          files: |
-            autorestart-${{ github.ref_name }}-linux.zip
-            autorestart-${{ github.ref_name }}-windows.zip
-          generate_release_notes: true
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --generate-notes \
+            *.zip

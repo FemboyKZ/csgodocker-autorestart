@@ -1,35 +1,26 @@
-FROM registry.gitlab.steamos.cloud/steamrt/sniper/sdk:latest AS build
+FROM registry.gitlab.steamos.cloud/steamrt/sniper/sdk:latest
 
-RUN apt-get update -y && \
-    apt-get install -y --no-install-recommends \
-        python3 \
-        python3-pip \
-        git \
-    && git clone http://github.com/alliedmodders/ambuild \
-    && pip3 install ./ambuild \
-    && rm -rf /var/lib/apt/lists/*
+RUN dpkg --add-architecture i386 \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends \
+        python3-pip python3-venv git ca-certificates \
+        gcc-multilib g++-multilib libstdc++6:i386 \
+ && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /src
-COPY . .
+RUN python3 -m venv /opt/ambuild-venv \
+ && /opt/ambuild-venv/bin/pip install --upgrade pip \
+ && /opt/ambuild-venv/bin/pip install git+https://github.com/alliedmodders/ambuild.git@master
+ENV PATH=/opt/ambuild-venv/bin:$PATH
 
-# Ensure submodules are present (they should be via .dockerignore exclusions or COPY).
-# If building from a tarball without submodules, uncomment:
-# RUN git submodule update --init --recursive
+WORKDIR /work
 
-RUN mkdir -p build && cd build && \
-    python3 ../configure.py \
-        --sdks cs2 \
-        --targets x86_64 \
-        --mms_path ../metamod-source \
-        --hl2sdk-manifests ../metamod-source/hl2sdk-manifests \
-        --enable-optimize
+# These three paths must be supplied by the caller via bind-mount or rebuild.
+ENV HL2SDK=/sdks/hl2sdk-csgo \
+    MMSOURCE=/sdks/metamod-source \
+    SOURCEMOD=/sdks/sourcemod
 
-RUN cd build && ambuild
-
-# minimal image with just the built artifact
-FROM alpine:latest AS output
-
-COPY --from=build /src/build/package /package
-
-# copy all build artifacts (addons/ and cfg/) to /output volume
-CMD ["sh", "-c", "cp -r /package/* /output/"]
+# Default entry: fresh build into /work/build, output ends up in /work/build/package.
+CMD ["bash", "-c", "\
+    rm -rf build && mkdir build && cd build && \
+    python3 ../configure.py --enable-optimize --targets=x86 && \
+    ambuild"]

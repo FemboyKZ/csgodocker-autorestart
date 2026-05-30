@@ -9,15 +9,13 @@
 
 #include <string>
 
-#include "tier0/memdbgon.h"
-
-// Defined in autorestart.cpp.
-extern IVEngineServer2 *g_pEngineServer2;
+// Provided/populated by smsdk_ext (the SourceMod extension SDK).
+extern IVEngineServer *engine;
 
 static ISteamHTTP *GetSteamHTTP()
 {
 	// Dedicated servers use the gameserver Steam context.
-	if (g_pEngineServer2 && !g_pEngineServer2->IsDedicatedServer())
+	if (engine && !engine->IsDedicatedServer())
 	{
 		return SteamHTTP();
 	}

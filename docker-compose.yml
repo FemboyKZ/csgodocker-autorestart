@@ -1,7 +1,13 @@
 services:
-  build-linux:
-    build:
-      context: .
-      dockerfile: Dockerfile
+  build:
+    build: .
     volumes:
-      - ./output:/output
+      - .:/work
+      # Defaults assume SDKs live in the repo root:
+      #   ./hl2sdk-csgo
+      #   ./metamod-source
+      #   ./sourcemod
+      # Override by exporting HL2SDK / MMSOURCE / SOURCEMOD on the host.
+      - ${HL2SDK:-./hl2sdk-csgo}:/sdks/hl2sdk-csgo:ro
+      - ${MMSOURCE:-./metamod-source}:/sdks/metamod-source:ro
+      - ${SOURCEMOD:-./sourcemod}:/sdks/sourcemod:ro
