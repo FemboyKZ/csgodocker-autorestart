@@ -45,7 +45,7 @@ docker compose up --build
 Result (copied into `./output`):
 
 ```text
-output/addons/sourcemod/extensions/autorestart.ext.2.csgo.so
+output/addons/sourcemod/extensions/autorestart.ext.so
 ```
 
 Drop the contents of `output/addons/` into the server's `csgo/addons/` (this is what the CSGODocker `autorestart` layer ships).
