@@ -43,6 +43,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           path: project
+          submodules: recursive
 
       - name: Checkout SourceMod
         uses: actions/checkout@v6
@@ -127,6 +128,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           path: project
+          submodules: recursive
 
       - name: Checkout SourceMod
         uses: actions/checkout@v6
