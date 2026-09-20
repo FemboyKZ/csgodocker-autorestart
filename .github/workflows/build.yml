@@ -4,173 +4,31 @@ on:
   pull_request:
 
 jobs:
-  config:
-    runs-on: ubuntu-latest
-    outputs:
-      versions: ${{ steps.set.outputs.versions }}
-    steps:
-      - id: set
-        name: Set version matrix
-        run: |
-          python3 - << 'PYEOF'
-          import json, os
-          VERSIONS = [
-              ("1.12-dev", "1.12-dev"),
-              ("master", "master"),
-          ]
-          versions = [
-              {"sm_ver": s, "mm_ver": m,
-               "sm_label": s.replace("-dev", "").replace("master", "1.13"),
-               "mm_label": m.replace("-dev", "").replace("master", "2.0"),}
-              for s, m in VERSIONS
-          ]
-          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-              f.write("versions=" + json.dumps(versions) + "\n")
-          PYEOF
-
   build:
-    needs: config
-    strategy:
-      matrix:
-        platform:
-          - { os: windows-latest, os_short: windows, ext: .dll }
-        version: ${{ fromJSON(needs.config.outputs.versions) }}
-      fail-fast: false
-    runs-on: ${{ matrix.platform.os }}
-    name: ${{ matrix.platform.os_short }}--mm-${{ matrix.version.mm_label }}--sm-${{ matrix.version.sm_label }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          path: project
-          submodules: recursive
-
-      - name: Checkout SourceMod
-        uses: actions/checkout@v7
-        with:
-          repository: alliedmodders/sourcemod
-          ref: ${{ matrix.version.sm_ver }}
-          submodules: recursive
-          path: sourcemod
-
-      - name: Checkout Metamod:Source
-        uses: actions/checkout@v7
-        with:
-          repository: alliedmodders/metamod-source
-          submodules: recursive
-          ref: ${{ matrix.version.mm_ver }}
-          path: metamod-source
-
-      - uses: actions/setup-python@v7
-        name: Setup Python
-        with:
-          python-version: "3.14"
-
-      - name: Install Python dependencies
-        run: python -m pip install --upgrade pip setuptools wheel
-
-      - name: Install AMBuild
-        run: |
-          git clone https://github.com/alliedmodders/ambuild.git
-          cd ambuild
-          python setup.py install --user
-
-      - name: Build
-        working-directory: project
-        shell: bash
-        run: |
-          mkdir build && cd build
-          python ../configure.py \
-            --sm-path="${{ github.workspace }}/sourcemod" \
-            --mms-path="${{ github.workspace }}/metamod-source" \
-            --enable-optimize \
-            --targets=x86
-          ambuild
-
-      - name: Stage release files
-        shell: bash
-        run: |
-          mkdir -p staging/addons/sourcemod/extensions
-          touch staging/addons/sourcemod/extensions/autorestart.autoload
-          find project/build -name '*${{ matrix.platform.ext }}' -exec cp {} staging/addons/sourcemod/extensions/ \;
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: autorestart-${{ matrix.platform.os_short }}--mm-${{ matrix.version.mm_label }}--sm-${{ matrix.version.sm_label }}
-          path: staging/*
-
-  build-docker:
-    needs: config
-    strategy:
-      matrix:
-        runtime:
-          - name: steamrt4
-            image: registry.gitlab.steamos.cloud/steamrt/steamrt4/sdk:latest
-          - name: steamrt3
-            image: registry.gitlab.steamos.cloud/steamrt/sniper/sdk:latest
-          #- name: steamrt2
-          #  image: registry.gitlab.steamos.cloud/steamrt/scout/sdk:latest
-        version: ${{ fromJSON(needs.config.outputs.versions) }}
-      fail-fast: false
     runs-on: ubuntu-latest
-    name: ${{ matrix.runtime.name }}--mm-${{ matrix.version.mm_label }}--sm-${{ matrix.version.sm_label }}
     steps:
       - uses: actions/checkout@v7
         with:
-          path: project
           submodules: recursive
 
-      - name: Checkout SourceMod
-        uses: actions/checkout@v7
-        with:
-          repository: alliedmodders/sourcemod
-          ref: ${{ matrix.version.sm_ver }}
-          submodules: recursive
-          path: sourcemod
-
-      - name: Checkout Metamod:Source
-        uses: actions/checkout@v7
-        with:
-          repository: alliedmodders/metamod-source
-          submodules: recursive
-          ref: ${{ matrix.version.mm_ver }}
-          path: metamod-source
-
+      # Builds output/mm-1.12 (SourceHook) and output/mm-2.0 (KHook)
       - name: Build inside container
-        run: |
-          docker run --rm \
-            -v "$GITHUB_WORKSPACE:/work" \
-            -w /work/project \
-            -e HL2SDK=/work/project/hl2sdk-csgo \
-            -e MMSOURCE=/work/metamod-source \
-            -e SOURCEMOD=/work/sourcemod \
-            ${{ matrix.runtime.image }} \
-            bash -ec '
-              git clone https://github.com/alliedmodders/ambuild.git
-              cd ambuild && python3 setup.py install && cd ..
-              mkdir -p build && cd build
-              python3 ../configure.py \
-                --sm-path=/work/sourcemod \
-                --mms-path=/work/metamod-source \
-                --enable-optimize \
-                --targets=x86
-              ambuild
-            '
+        run: docker compose run --rm build
 
-      - name: Stage release files
-        run: |
-          mkdir -p staging/addons/sourcemod/extensions
-          touch staging/addons/sourcemod/extensions/autorestart.autoload
-          find project/build -name '*.so' -exec cp {} staging/addons/sourcemod/extensions/ \;
-
-      - name: Upload artifact
+      - name: Upload MM:S 1.12 artifact
         uses: actions/upload-artifact@v7
         with:
-          name: autorestart-${{ matrix.runtime.name }}--mm-${{ matrix.version.mm_label }}--sm-${{ matrix.version.sm_label }}
-          path: staging/*
+          name: autorestart-linux-mm-1.12
+          path: output/mm-1.12/*
+
+      - name: Upload MM:S 2.0 artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: autorestart-linux-mm-2.0
+          path: output/mm-2.0/*
 
   release:
-    needs: [build, build-docker]
+    needs: [build]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
@@ -180,14 +38,12 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           path: artifacts
-
       - name: Zip artifacts
         run: |
-          cd artifacts
-          for dir in */; do
-            zip -r "../${dir%/}.zip" "$dir"
+          for dir in artifacts/*/; do
+            name="$(basename "$dir")"
+            (cd "$dir" && zip -r "$GITHUB_WORKSPACE/$name.zip" .)
           done
-          cd ..
 
       - name: Create release
         env:

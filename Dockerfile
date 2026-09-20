@@ -1,17 +1,17 @@
 FROM registry.gitlab.steamos.cloud/steamrt/sniper/sdk:latest
 
-RUN git clone https://github.com/alliedmodders/ambuild.git /opt/ambuild \
-	&& cd /opt/ambuild && python3 setup.py install
+RUN git clone https://github.com/alliedmodders/ambuild.git \
+	&& cd ambuild && python3 setup.py install
 
 WORKDIR /work
 
-# These three paths must be supplied by the caller via bind-mount or rebuild.
-ENV HL2SDK=/sdks/hl2sdk-csgo \
-    MMSOURCE=/sdks/metamod-source \
-    SOURCEMOD=/sdks/sourcemod
-
-# Default entry: fresh build into /work/build, output ends up in /work/build/package.
-CMD ["bash", "-c", "\
-    rm -rf build && mkdir build && cd build && \
-    python3 ../configure.py --enable-optimize --targets=x86 && \
-    ambuild"]
+# Builds one package per Metamod:Source flavor (submodules must be checked out):
+#   metamod-source     -> output/mm-1.12 (SourceHook)
+#   metamod-source-2.0 -> output/mm-2.0  (KHook)
+CMD ["bash", "-ec", "\
+    for pair in metamod-source:mm-1.12 metamod-source-2.0:mm-2.0; do \
+      mms=${pair%%:*}; flavor=${pair##*:}; \
+      rm -rf build/$flavor output/$flavor && mkdir -p build/$flavor output && \
+      (cd build/$flavor && python3 ../../configure.py --mms_path=/work/$mms --hl2sdk-root=/work --enable-optimize && ambuild) && \
+      cp -r build/$flavor/package output/$flavor; \
+    done"]

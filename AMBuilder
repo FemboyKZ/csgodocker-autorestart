@@ -1,27 +1,11 @@
 # vim: set sts=2 ts=8 sw=2 tw=99 et ft=python:
-import os, sys
+project = builder.LibraryProject(MMSPlugin.metadata["name"])
 
-projectName = 'autorestart'
+for sdk_target in MMSPlugin.sdk_targets:
+    binary = MMSPlugin.HL2Library(builder, sdk_target.cxx, project, sdk_target.sdk)
+    binary.sources += [
+        "src/autorestart.cpp",
+        "src/discord.cpp",
+    ]
 
-sourceFiles = [
-  os.path.join('src', 'autorestart.cpp'),
-  os.path.join('src', 'discord.cpp'),
-]
-
-project = Extension.HL2Project(builder, projectName + '.ext')
-
-if os.path.isfile(os.path.join(builder.currentSourcePath, 'sdk', 'smsdk_ext.cpp')):
-  # Use the copy included in the project
-  project.sources += [os.path.join('sdk', 'smsdk_ext.cpp')]
-else:
-  # Use the copy included with SM 1.6 and newer
-  project.sources += [os.path.join(Extension.sm_root, 'public', 'smsdk_ext.cpp')]
-
-project.sources += sourceFiles
-
-for cxx in builder.targets:
-  binary = Extension.HL2Config(builder, project, projectName + '.ext', cxx)
-  binary.compiler.linkflags += ['psapi.lib'] if cxx.target.platform == 'windows' else ['-ldl']
-
-
-Extension.extensions = builder.Add(project)
+MMSPlugin.tasks += builder.Add(project)
